@@ -1,0 +1,505 @@
+---
+title: "Investigation of Air Pollution in NYC"
+author: "Yutong Wu"
+date: "12/8/2019" 
+fontsize: 12pt
+header-includes:
+    - \usepackage{setspace}\doublespacing
+output:
+  pdf_document:
+    df_print: paged
+  latex_engine: xelatex
+  number_sections: yes
+  toc: yes
+---
+
+```{r echo = FALSE, results = 'hide', message = FALSE}
+options(knitr.table.format = 'markdown')
+```
+
+## 1. Introduction
+
+### 1.1 Aim of the Project
+
+[NYC Health](https://www1.nyc.gov/assets/doh/downloads/pdf/eode/eode-air-quality-impact.pdf) states that air pollution is one of the most significant environmental problem in New York and causes more than 3000 death every year. This is partially accredited to the prosperous tourism, relatively high population density, and heavy traffic in the city. Besides, as [NYC Health](http://a816-dohbesp.nyc.gov/IndicatorPublic/traffic/index.html) demonstrates, traffic contributes to 17% of all emissions. 
+
+Intrigued from this fact, the study aims to help the government better predict and monitor the air quality as well as control the key factors leading to air pollution, by evaluating the relationship between air pollution and factors, including traffic, air pollutant, and weather, and investigating how those factors contribute to the overall level air pollution in New York. 
+
+### 1.2 Project Roadmap
+
+First, the air quality within different counties of New York State in 2016 is summarized and compared. Then, based on the result that New York (NY) contributes most to the pollution level, the focus is narrowed down towards NY City. After that, a Simple Linear Regression is ran to examine the overall relationship between traffic and pm 2.5. Based on this, air pollutant and weather factors are included to build 3 regression models using machine learning. Finally, the optimal prediction model will be selected, providing a simplified regression model to estimate the air pollution; and the relationship between different predictors will be analyzed, to better understand the direct and indirect patterns of those factors in contributing to air pollution. 
+
+## 2. Problem Statement and Background
+
+### 2.1 Aim of Analysis
+
+In this study, I analyze the traffic, air pollutant, and meteoroManhattan factors within New York City in 2016. Using these data, the analysis aims to investigate how traffic, air pollutant, and weather condition affect air quality by adopting a combination of statistic learning models to (1) evaluate how different features synergistically affect the pm2.5 concentration and interact with each other; (2) predict future air pollution level; (3) identify predictors that are most important. The analysis results are expected to guide policy makers better understand the significance in controlling traffic to improve air quality and provide a simplified prediction model to monitor and predict the air pollution level. 
+
+### 2.2 Related Work Review
+
+Rybarczyk and Zalakeviciute (2017) conducted a similar project aiming to provide an affordable air pollution predicted model based on machine learning method for developing countries. The authors also used transportation, weather, and air pollutant variable as predictors and PM2.5 as outcome. However, their study mainly focus on discussing how to accurately predict Air Pollution using affordable sources and devices for developing counties, rather than evaluating the relationship between features and outcome in an air pollution model for a specific city in developed country.
+
+## 3. Data
+
+### 3.1 Overview and Data Sources
+
+The unit of observation is New York City (NYC). Daily average concentration of PM2.5 in 2016 is selected as the outcomes representing the level of air pollution. Besides, there are three types of predictors, traffic amount, air pollutant density, and meteorological factors. The restructured traffic data represents the daily amount of vehicles (traffic amount) traveled in NY city. Air pollutants include the daily concentration of SO2, CO, NO2, and Ozone and is collected from website of U.S. Environmental Protection Agency. Meteorological factors involve daily Temperature in Celsius (tempm), Dew point in Celsius (dewptm), Humidity percentage (hum), Wind speed in kph (wspdm), and Pressure in mBar (pressurem).
+
+Regarding the data source, the air pollutant data is collected from the website of U.S. Environmental Protection Agency ( [EPA](https://www.epa.gov/outdoor-air-quality-data/download-daily-data)). 
+Weather data of NYC in 2016 is downloaded from Kaggle ( [kaggle](https://www.kaggle.com/meinertsen/nyc-hourly-weather-data/data)). 
+Traffic data is gathered from New York Government official website.  ( [NY Gov](https://data.ny.gov/Transportation/Hourly-Traffic-on-Metropolitan-Transportation-Auth/qzve-kjga))
+
+### 3.2 Data Wrangling
+
+The data wrangling process for this study can be summarized as five parts: a) restructure data sets such as selecting related variables; b) transform the data type such as from character to date type. c) uniform the unit of observation; d) merge different data sets of predictors and outcome; e) clean missing value; 
+
+Specifically, regarding the traffic data, the raw data describes the hourly amount of vehicles passing through the tunnels and bridges operated by the MTA (Metropolitan Transportation Authority) in the NY city from 2012 to 2019. The first step is to transform the Date variable from character to date type using _`mutate`_ and _`as.Date`_ functions and then select the data from 2016/1/1 to 2016/12/31. Then, a new variable total_vehicles is created by adding up the ETC and cash column using _`mutate`_; besides, out of the 2 direction, only direction "in" is filtered to avoid double count and only plaza ID from 1 to 11 are filtered to represent NYC. Finally, the unit of analysis is transformed to NYC through adding up all hourly vehicle volume passing different tunnels by date using _`group_by`_ and _`sum`_ function. 
+
+For the air pollutant data, data sets of 5 type air pollutants are separately acquired from EPA website. The first step is to restructure each data set using  _`select`_ function in _`dplyr`_ package, to keep the variables that will be imputed in analytic models in order to reduce potential issues in joining the different datasets later. The second step is to join the restructured data sets together using _`full_join`_ by Date, County, and Site variables. I use _`full_join`_ here since want to keep all the observation. After that, missing value was dropped. 
+
+For the meteorological data, row data of hourly weather information in New York city are used. Similarly, first step is to select the relevant variables and transformed the date variable into date class. Different from daily-based pollutant data, weather data is hourly base. Thus the next step is to transform the weather data into daily base by summarizing the mean of the hourly data for each day. I average the hourly data instead of adding them up as did for traffic data because the traffic data is measured by volumn. After that, the unit of analysis is transformed to NYC by filtering New York, Bronx, Kings, and Queens from the previous emission data set and running the air pollutant average value of the 4 counties for each day in 2016. 
+
+Finally, the 3 type of variable was merged by  _`full_join`_  and missing value was dropped using _`na.omit`_ function. 
+
+``` {r message = FALSE, include=FALSE}
+require (tidyr)
+require (tidyverse)
+require (caret)
+require (recipes)
+
+# Traffic Data Wrangling
+
+# read the raw data
+data_traffic <- read_csv(file = "ny_eco_Data/Hourly_Traffic_on_Metropolitan_Transportation_Authority__MTA__Bridges_and_Tunnels__Beginning_2010.csv")
+
+# Transform the type of date variable  from character to date 
+data_traffic <- data_traffic %>%
+  mutate (Date = as.Date (data_traffic$Date, format = "%m/%d/%Y")) 
+class (data_traffic$Date)
+
+data_traffic <- data_traffic [363676:528147, ]
+nyc_traffic <- data_traffic %>% 
+  # sum the number of vehicles using ETC and cash
+  mutate (total_vehicles = Vehicles_ETC + `Vehicles_Cash_VToll`) %>%
+  # filter vehicles that travel in city to avoid double count
+  filter (Direction == "I") %>%
+  # filter counties of NY city(Plaza ID fron 1~11 representing counties of NYC)
+  filter (Plaza_ID >= 1 & Plaza_ID <=11) %>%
+  select (Date, total_vehicles) %>%
+  # summarize the data by date and calculate the by counting the sum of the traffic number for each hour
+  group_by(Date) %>%
+  na.omit() %>%
+  summarize_all(funs(sum))
+```
+
+```{r message = FALSE, include=FALSE}
+# Air Pollutant Data Wrangling
+
+# Read the csv file 
+data_PM <- read.csv (file = "ny_air_2016/pm2.5_2016.csv")
+data_NO2 <- read.csv (file = "ny_air_2016/no2_2016.csv")
+data_CO <- read.csv (file = "ny_air_2016/co_2016.csv")
+data_SO2 <- read.csv (file = "ny_air_2016/so2_2016.csv")
+data_O3 <- read.csv (file = "ny_air_2016/o3_2016.csv")
+
+# Select the columns that we need
+data_pm2.5 <- data_PM %>%
+  select (Date, daily.pm2.5 = Daily_Mean_PM2.5_Concentration, COUNTY, Site.Name) 
+
+data_no2 <- data_NO2 %>%
+  select (Date, daily.no2 = Daily.Max.1.hour.NO2.Concentration, COUNTY, Site.Name)  
+data_so2 <- data_SO2 %>%
+  select (Date, daily.so2 = Daily.Max.1.hour.SO2.Concentration, COUNTY, Site.Name) 
+data_co <- data_CO %>%
+  select (Date, daily.co = Daily.Max.8.hour.CO.Concentration, COUNTY, Site.Name) 
+data_o3 <- data_O3 %>%
+  select (Date, daily.o3 = Daily.Max.8.hour.Ozone.Concentration, COUNTY, Site.Name) 
+
+# Merge all the data into one dataset using full_join. 
+data_emission <- full_join(data_pm2.5, data_co, by = c( "Date", "COUNTY", "Site.Name" ))
+data_emission <- full_join(data_emission, data_no2, by = c( "Date", "COUNTY", "Site.Name" ))
+data_emission <- full_join(data_emission, data_o3, by = c( "Date", "COUNTY", "Site.Name" ))
+data_emission <- full_join(data_emission, data_so2, by =  c( "Date", "COUNTY", "Site.Name" ))
+data_emission <- data_emission %>% na.omit()
+
+# create air pollutant data set for New York city based on previous data set for different counties in NY state
+data_emission_nyc <- 
+  data_emission %>%
+  filter (COUNTY == "New York" |
+            COUNTY == "Bronx" |
+            COUNTY == "Kings" |
+            COUNTY == "Queens" | 
+            COUNTY == "Richmond")
+
+# Transform the variable type to Date and Transform the unit from counties to NYC by using the average value of the 4 NYC counties
+nyc_air <-
+data_emission_nyc %>%
+  mutate (Date = as.Date(data_emission_nyc$Date, format = "%m/%d/%Y")) %>%
+  group_by (Date) %>%
+  select (-COUNTY, -Site.Name) %>%
+  na.omit() %>%
+  summarise_all (mean)
+head(nyc_air)
+```
+
+```{r message = FALSE, include=FALSE}
+# Weather Data Wrangling
+
+# load the 2016 nyc weather data 
+nyc_weather <- read_csv (file = "new-york-city-taxi-trip-hourly-weather-data/Weather.csv")
+nyc_weather <- nyc_weather %>%
+  # mutate the datetime variable to convert the strings to dates 
+  mutate (pickup_datetime = as.Date(nyc_weather$pickup_datetime, "%Y-%m-%d %H:%M:%S")) %>%
+  select (Date = pickup_datetime, tempm, dewptm, hum, wspdm, pressurem)
+
+# transform from hourly base to daily base
+nyc_weather <-
+  nyc_weather %>%
+    group_by(Date) %>%
+    drop_na() %>%
+    summarize_all (mean)
+
+# Combine nyc_air and nyc_weather
+nyc <-
+  full_join (nyc_air, nyc_weather, by = "Date") %>%
+  na.omit() 
+nyc <-
+  full_join (nyc, nyc_traffic, by = "Date") %>%
+  na.omit() 
+```
+
+## 4. Analysis 
+
+### 4.1 Method and Tools
+
+Primary analytic methods include correlation analysis, single linear regression, and machine learning for multivariable regression. Three models are generated for machine learning regression, including linear regression, K-nearest neighbor(knn), and random forest(rf). Statistic metrics are adopted to assess the accuracy of these models. Specifically, Rsquared is used to examine the predictability. To evaluate the goodness of fit, since RMSE tends to be larger than MAE as the sample size getting larger and is more sensitive to outliers (Chai&Draxler, 2014), I use RMSE instead of Mean Absolute Error (MAE) for conservative purpose and expect a good RMSE as lower than 0.2. Data visualization is also adopted to demonstrate analysis and results, with specific tools such as table (_`kable`_), scatter plots(_`ggscatter`_), and dotplot. 
+
+### 4.2 Analysis Process 
+
+#### 4.2.1 Air Pollution Performance Evaluation by Counties in NY State
+
+I start by taking an overview of the PM2.5 level among 10 counties of NY State in 2016. This is achieved by summarizing the mean of daily PM2.5 for each county through the year using _`summarize`_ and _`mean`_ and ranking the value by _`arrange`_. The result is then demonstrated as table using `_kable_`. The result reveals that 4 counties in New York City is most polluted. Among those counties, Manhattan has the highest average daily PM2.5 value. Based on this result, the following analysis will focus on NY City.
+```{r message = FALSE, include=FALSE}
+# === {r echo=FALSE, results = "asis",  eval=FALSE}
+# Sumarize as daily average to compare the level of air pullution 
+data_pm_county_comp <- 
+  data_PM %>%
+  select (Date, daily.pm2.5 = Daily_Mean_PM2.5_Concentration, COUNTY) %>%
+  group_by (COUNTY) %>%
+  na.omit (.) %>%
+  summarise (mean_daily_pm2.5 = mean(daily.pm2.5), var_daily_pm2.5 = var(daily.pm2.5) ) %>%
+  arrange(desc(mean_daily_pm2.5)) %>%
+  top_n(10)
+data_pm_county_comp
+
+# Visualize the result using table
+require (knitr)
+# install.packages("kableExtra")
+library(kableExtra)
+data_pm_county_comp %>%
+    kable () %>%
+    kable_styling(font_size = 10)
+```
+
+#### 4.2.2 Simple Linear Regression for Air Pollution and Traffic
+
+In the next stage, the relationship between PM2.5 and Traffic is analyzed by adopting simple linear regression method. Firstly, I use _`cor()`_ function to compute the Pearson’s correlation coefficient of estimated daily vehicles volume and the PM2.5 concentration. The result is 0.1185, indicating that there is a small positive correlation between traffic and pm2.5. To examine this result, I used _`ggscatter`_ in _`inggpubr`_ package to visualize the relationship by scatter plots (Graph 1), which shows that the outliers affect the accuracy of the correlation. To deal this the outliers effect, I use _`filter`_ to exclude the outliers and re-run the correlation result by the same procedure (Graph 2). The new result suggests a slightly lower coefficient of approximately 0.1. One of the possible explanations why the statistic result is weaker than expected is that other relationships such as from hidden variables drive different forces toward the outcome. Thus, more variables are included in the following analysis.
+
+```{r echo = FALSE, message = FALSE, results = FALSE, out.width="50%", out.height="50%"}
+# See the correlation coefficient between the traffic and pm2.5 
+cor (nyc$total_vehicles, nyc$daily.pm2.5)
+
+# Visualize the relationship by scatter plot
+nyc_pm_traf1 <- nyc %>% 
+  select (Date, daily.pm2.5, total_vehicles) 
+
+library ("ggpubr")
+ggscatter (nyc_pm_traf1, x = "total_vehicles", y = "daily.pm2.5",
+        add = "reg.line", conf.int = TRUE, 
+        cor.coef = TRUE, cor.method = "pearson", fill = "steelblue",
+        xlab = "Daily Vehicle Amount", ylab = "Daily PM2.5 Concentration", title = "Graph 1") 
+
+nyc_pm_traf2 <- nyc %>% 
+  select (Date, daily.pm2.5, total_vehicles) %>%
+  # kick out the outliers   
+  filter (total_vehicles >=2e+05)
+
+ggscatter (nyc_pm_traf2, x = "total_vehicles", y = "daily.pm2.5", 
+        add = "reg.line", conf.int = TRUE, 
+        cor.coef = TRUE, cor.method = "pearson", 
+        xlab = "Daily Vehicle Amount", ylab = "Daily PM2.5 Concentration", title = "Graph 2") 
+```
+
+#### 4.2.3 Multivariables Machine Learning Model
+
+Air pollutant and meteorological factors are now introduced as new independent variables in addition to the traffic predictor. To predict the air pollution and to examine the relationship between features, machine learning technique is adopted. To achieve this, the first step is to split 75% of the data as training data and 25% as testing data, applying _`createDataPartition`_ in _`caret`_ package. After that, a thorough examination on training data is conducted through observing the distribution of each variable by applying _`ggplot`_(Shown Below). _`facet_wrap`_ in _`ggplot`_ is used to create subplots for each variable. Through examination, three issues are detected. First, the distribution of the outcome variable pm2.5 and predictor SO2 is skewed, violating the normal distribution assumption. Second, the scale range of variables considerably varies. Variables with larger range will outweigh those with lower scale, causing the value not comparable and disturbing the accuracy of the regression model(Lakshmanan, 2019). Third, there are outliers exist in SO2 and vehicle variable.
+
+
+```{r echo = FALSE, message = FALSE, results = FALSE}
+# 1. Split the data into a training and test dataset partitioning 75% of the data into the training data, and holding out 25% of the data as a test set
+set.seed (123) 
+index = createDataPartition (nyc $ daily.pm2.5, p = .75, list = F)  # list = FALSE avoids returns the data as a list.
+train_nyc <- 
+  nyc [index, ]
+test_nyc <-
+  nyc [-index, ]
+
+# Skim Train data
+skimr :: skim (train_nyc)
+
+# 2. Examine the Data
+# visualize the numerical data
+train_nyc %>% 
+  # select if variable type is numeric
+  select_if(is.numeric) %>%
+  # using `gather` to set variable as "key" column and observation as "value" column
+  gather (var, val) %>%
+  # use ggplot to visualize and create distribution for each variable,  
+  ggplot (aes(val, group = var)) +
+  geom_histogram(bins = 30) +    
+   # visualize 
+  facet_wrap(~var, scales = "free", ncol = 3) +
+  ggtitle ("Graph 3. Data Examination")
+```
+```{r include = FALSE, message = FALSE}
+# 3. Data Pre-Processing 
+#   3.1 Skewness
+ # log the skewed variable for train data
+train_nyc_2 <- 
+  train_nyc %>%
+    mutate(daily.so2 = log (daily.so2+1)) %>%
+    mutate(daily.pm2.5 = log (daily.pm2.5+1))
+ # log the skewed variable for testing data
+test_nyc_2 <- 
+  test_nyc %>%
+  mutate(daily.so2 = log (daily.so2+1)) %>%
+  mutate(daily.pm2.5 = log (daily.pm2.5+1))
+ # visualize the logged variable
+train_nyc_2 %>%
+  select (daily.so2, daily.pm2.5) %>%
+  gather (var, val) %>%
+  ggplot (aes(val)) +
+    geom_histogram (bins = 50) +
+    facet_wrap(~var, scales = "free", ncol = 2)
+
+#   3.2 Recipes Scale
+require (recipes)
+rcp <- 
+  recipe (daily.pm2.5 ~ . , train_nyc_2) %>%
+    # Normalize Scale in order to compare
+    step_range (all_numeric()) %>%
+    prep()
+
+# Apply the recipe to the training and test data
+train_nyc_3 <- bake(rcp,train_nyc_2)
+test_nyc_3 <- bake(rcp,test_nyc_2) 
+
+head(train_nyc_3)
+```
+```{r include = FALSE, message = FALSE}
+# 4. Model
+
+# 4.1 Set cross-validation settings as an object that can be easily applied across different machine learning applications; Use K-fold cross-validation method with 5 subsets.
+
+require (caret)
+
+# set seed for replication
+set.seed (1988)
+# randomly dividing the data into 5 groups
+folds <- 
+  createFolds (train_nyc_3$daily.pm2.5, k = 5)
+
+# check the length of each fold
+sapply(folds,length)
+
+# Apply the folds index into trainControl
+control_conditions <-
+  trainControl(
+    method = "cv",
+    index = folds
+    )
+```
+
+Targeting on those issues, a data pre-processing process is conducted. To standardize the distribution, I manipulate the skewed variables into log value using _`mutate`_ and _`log`_ and store in new train and test objective. After that, a recipe is built as a container that holds data pre-processing steps to feed into model (Thoen, 2018), including step to normalizing the range of data here using _`step_range`_. Then, I apply the recipe to the train and test data set respectively to obtain the final training and testing data set. 
+
+Next, before building model, the first thing is to randomly split the training data into 5 groups by _`createFolds`_ in _`caret`_ package for cross validation purpose in machine learning. The 5-group list are stored as an index and then applied into _`trainControl`_ function in order to set up the control condition that can be applied across different model. With data and environment settled, 3 different models are ran by applying _`train`_ function, linear model, k-nearest neighbors, and random forest model. To select the optimal one, a list is created by _`list`_ function and is applied to _`resamples`_ and _`dotplot`_ function to summarize performance by different metrics (MAE, RMSE, Rsquared) and to visualize the comparison result. The result (figure 4) shows that Ramdon Forest (rf) model performs best with the lowest RMSE of 0.13 and with the higest Rsquared of 0.39. 0.13 means that square root of the residuals variance under rf model is only 0.13 and the fitness is better than other models. 0.39 indicates that the model explains 39% of the variability of the response data around its mean thus the ability to predict is relatively higher (Rieuf, 2017). To test the accuracy of the optimal model, I predict the outcome using the test data under rf model by _`predict`_ function and calculate the corresponding RMSE. The RMSE based on testing data is 0.11, which is lower than 0.2 and indicates a good fitness. 
+
+```{r include = FALSE, message = FALSE}
+# 4.2 Run model
+# linear model
+mod_lm <-
+  train (
+    daily.pm2.5 ~ . , 
+    data = train_nyc_3, 
+    method = "lm",
+    metric = "RMSE",
+    # cross validation conditions
+    trControl = control_conditions
+  )
+mod_lm
+
+# k-nearest neighbor
+mod_knn <-
+  train (
+    daily.pm2.5 ~ . ,
+    data = train_nyc_3,
+    method = "knn",
+    metric = "RMSE",
+    trControl = control_conditions,
+    # vary the tuning parameter k
+    tuneGrid = expand.grid(k = c(1,5,10,25))
+      )
+mod_knn
+mod_knn$finalModel # 10-neighbor wins since when k=10, the RMSE is lowest, namely model accuracy is highest.  
+
+# random forest
+mod_rf <- 
+  train (
+    daily.pm2.5 ~ . ,
+    data = train_nyc_3, 
+    method = "ranger",
+    metric = "RMSE",
+    # for future comparison between variables
+    importance = "permutation",
+    trControl = control_conditions
+    )
+mod_rf
+ggplot (mod_rf)
+```
+```{r echo = FALSE, message = FALSE, results = FALSE, fig.align='center', out.width="80%", out.height="80%"}
+# 4.3 comparison between model
+  # create a model list 
+mod_list <- 
+  list ( 
+    lm = mod_lm,
+    knn = mod_knn, # based on finalModel
+    rf = mod_rf # based on bestTune
+    )
+  # summarized different statitics matric and visualized by dotplot
+dotplot(resamples(mod_list),
+        main="Graph 4. Comparison Between Models")
+
+# Test the predictive accuracy of the best model by test data
+pred_y <- 
+  predict(mod_rf, newdata = test_nyc_3)
+pred_y
+
+# calculate the mean squared error
+mse = sum((pred_y - test_nyc_3$daily.pm2.5)^2) / nrow(test_nyc_3)
+(mse)^(1/2)
+```
+
+Finally, based on the optimal model, I compare the importance of predictors by _`varImp`_ function  which returns the relative importance scores of each features. Besides, a correlation coefficients metric between each variables are generated using _`cor`_ function and visualized by _`ggcorrplot`_ function. The result will be intepreted in details in the following section. 
+```{r include = FALSE, message = FALSE}
+# 5. Important Result 
+#   5.1 Variable importance 
+plot(varImp(mod_rf,scale=T),top = 10)
+varImp(mod_rf,scale=T)
+#   5.2  Correlation between the features
+# install.packages("ggcorrplot")
+sigma = train_nyc %>%
+        # omit the mising values
+        na.omit(.) %>% 
+        # select all numerical variables 
+        select(daily.pm2.5 : total_vehicles) %>% 
+        cor(.)
+ggcorrplot::ggcorrplot(sigma,hc.order = TRUE,outline.col = "white",tl.cex = 5)
+```
+
+## 5. Summary of Results 
+
+First, the overview of air Pollution Performance within different counties tells us that the top 4 polluted counties are from NY City, including New York(Manhattan), Bronx, Kings, and Queens (As shown in the table below). Among those counties, Manhattan has the highest average daily PM2.5 concentration, which is 8.09 ug/m^3. Based on this result, I suggest state government set goals and re-allocate resources targeting air pollution with a prioritized focus on the most polluted counties.  
+```{r echo=FALSE, message = FALSE, fig.cap = "Table 1" }
+data_pm_county_comp <- 
+  data_PM %>%
+  select (Date, daily.pm2.5 = Daily_Mean_PM2.5_Concentration, COUNTY) %>%
+  group_by (COUNTY) %>%
+  na.omit (.) %>%
+  summarise (mean_daily_pm2.5 = mean(daily.pm2.5), var_daily_pm2.5 = var(daily.pm2.5) ) %>%
+  arrange(desc(mean_daily_pm2.5)) %>%
+  top_n(8)
+
+# Visualize the result using table
+require (knitr)
+# install.packages("kableExtra")
+library(kableExtra)
+data_pm_county_comp %>%
+    kable () %>%
+    kable_styling(font_size = 12)
+```
+
+Second, the simple linear regression for air pollution and traffic shows that there is a positive correlation between vehicle amount and PM2.5 concentration. The more vehicles travel in the city, the higher the PM2.5 concentration might be. Although the correlation is not as high as expected, we cannot say the relationship between traffic and air pollution is weak. The result is probably due to the limitation of the data set and the hidden variable effect. 
+
+Third, concerning the multivariables Machine Learning Model, the Random Forest model is selected as the best prediction model due to a relatively better goodness of fit (lower RMSE) and stronger explanatory power (higher Rsquared). Based on rf model, an analysis of the variable importance reveals that air pollutant factors are most important type of variable and most related with PM2.5. Using this result, government could target on resident behavior or industry emission that contribute most to, such as, NO2 and Ozone.
+```{r echo = FALSE, message = FALSE, results = FALSE, fig.align='center', out.width="80%", out.height="80%"}
+plot(varImp(mod_rf,scale=T),top = 10, main = "Graph 5. Importance Score of Variables")
+```
+
+Regarding the relationship between different features (Graph 6), I find that air pollutants have the strongest positive correlation with each other compared and matter most in this PM2.5 prediction model. Weather data such as temperature and dew point also show moderate level positive correlation with PM2.5 concentration. Although we didn't see a strong direct relationship between traffic and pm2.5 as expected, the result of correlation between features suggest that the correlation between traffic and Ozone is around 0.5, which is relatively strong, and O3 is an important feature according to the above importance analysis. This indicates that indirect effect of traffic on PM2.5 is worthwhile to be further examined in the future research.   
+
+```{r echo = FALSE, message = FALSE, results = FALSE, fig.align='center', out.width="100%", out.height="100%"}
+sigma = train_nyc %>%
+        # omit the mising values
+        na.omit(.) %>% 
+        # select all numerical variables 
+        select(daily.pm2.5 : total_vehicles) %>% 
+        cor(.)
+ggcorrplot::ggcorrplot(sigma,hc.order = TRUE,outline.col = "white",tl.cex = 5, title = "Graph 6. Correlation between Features")
+```
+
+## 6. Discussion 
+
+This project is conducted in a logical manner and successfully finds some patterns between PM2.5 and different type of factors and builds a simplified prediction model for better air pollution Monitoring. 
+
+However, several limitation should not be overlooked. First, concerning the limitation of data source, the prediction model could be more reliable if the sample size is larger. Besides, the way I calculate daily traffic amount (add up the hourly amount of vehicle passing through the tunnels and bridges operated by the MTA by one direction) is discussable and might partially result in the weak direct correlation between traffic amount and PM2.5. 
+
+Second, regarding examination, I will dig more into the outliers and investigate how those outliers affect the accuracy of the model. Besides, I will evaluate the different ways in dealing with and compare the effect of imputing and omitting missing value on the prediction model. 
+
+Third, in terms of the feature limitation, the air pollutant data is the aggregate outcome resulted from not only traffic, but also resident and business behavior. Given more time, I would investigate deeper into those compositions by involving more features, such as heating oil consumption and industrial emission.     
+
+
+
+
+---
+
+## Acknowledgement: 
+
+I thank Prof. Raphael Calel and Prof. Eric Dunford for their useful suggestions and patient help during the project. 
+
+
+## Reference 
+
+E.Thoen, 2018. _A recipe for recipes._ [Available via: https://edwinth.github.io/blog/recipes_blog/]
+
+E.Rieuf, 2017. _How To Interpret R-squared and Goodness-of-Fit in Regression Analysis._ [Available via:https://www.datasciencecentral.com/profiles/blogs/regression-analysis-how-
+do-i-interpret-r-squared-and-assess-the]
+
+NYC Health. _Air Pollution and the Health of New Yorkers: The Impact of Fine Particles and Ozone_.  [Avaiable via: https://www1.nyc.gov/assets/doh/downloads/pdf/eode/eode-air-quality-impact.pdf]
+
+NYC Health. _The Public Health Impacts of PM2.5 from Traffic Air Pollution_ [Available via: http://a816-dohbesp.nyc.gov/IndicatorPublic/traffic/index.html]
+
+S.Lakshmanan, 2019. _How, When and Why Should You Normalize / Standardize / Rescale Your Data?_ [Available via: https://medium.com/@swethalakshmanan14/how-when-and-why-should-you-normalize-standardize-rescale-your-data-3f083def38ff]
+
+T. Chai & R. R. Draxler, 2014. _Root mean square error (RMSE) or mean absolute error (MAE)? – Arguments against avoiding RMSE in the literature._ [Available via: https://www.geosci-model-dev.net/7/1247/2014/gmd-7-1247-2014.pdf]
+
+Y.Rybarczyk & R.Zalakeviciute, 2017. _Regression Models to Predict Air Pollution from Affordable Data Collections._ [Available via: https://www.intechopen.com/books/machine-learning-advanced-techniques-and-emerging-applications/regression-models-to-predict-
+air-pollution-from-affordable-data-collections]
+
+- `Data Source`
+
+EPA, 2018. _Outdoor Air Quality Data_. [Available via: https://www.epa.gov/outdoor-air-quality-data/download-daily-data] 
+
+kaggle, _NYC Hourly Weather Data_. [Available via: https://www.kaggle.com/meinertsen/nyc-hourly-weather-data/data]. 
+
+NY Gov,   [Available via: https://data.ny.gov/widgets/qzve-kjga]
+
+- Citation for R Package
+
+citation ("tidyverse");
+citation("tidyr"); 
+citation ("caret");
+citation ("recipes");
+citation("inggpubr");
+citation("ggplot");
+citation ("knitr");
+citation("kableExtra");
